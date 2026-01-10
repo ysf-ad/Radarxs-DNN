@@ -1,8 +1,5 @@
-"""
-EST (Earliest Start Time) Greedy Planner - Simple Version.
-"""
 import numpy as np
-
+# refer to ../est_test.py to run
 class ESTPlanner:
     def __init__(self, max_trackers=500, steps_per_window=20):
         self.max_trackers = max_trackers
@@ -15,11 +12,16 @@ class ESTPlanner:
         """
         candidates = []
         
-        # Consider most urgent search
-        candidates.append({
-            'action': self.SEARCH_ACTION,
-            'time': float(np.min(obs['grid']))
-        })
+        # Consider most urgent search(es)
+        # We add enough search candidates to fill the window if necessary
+        limit = self.steps_per_window if self.steps_per_window is not None else 20
+        grid_min = float(np.min(obs['grid']))
+        
+        for _ in range(limit):
+            candidates.append({
+                'action': self.SEARCH_ACTION,
+                'time': grid_min
+            })
         
         # 2. Track Candidates (All active targets)
         t_desired = obs['t_desired']
