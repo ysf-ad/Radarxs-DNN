@@ -1,0 +1,149 @@
+"""
+Transformer-guided MCTS Planner for Radar Task Scheduling.
+Uses 4 features per tracker (t_desired, t_deadline, t_dwell, priority).
+
+NOTE: Transformer expects 8-feature format. adapt_obs() converts from 4-feature.
+Falls back to pure MCTS if no checkpoint loaded.
+"""
+import os
+import numpy as np
+
+try:
+    import torch
+    import torch.nn as nn
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
+from .mcts import MCTSPlanner, Node
+
+
+class PretrainedPureTransformer(nn.Module if TORCH_AVAILABLE else object):
+    """Transformer for task scheduling (8-feature input)."""
+    
+    def __init__(self, num_tasks=501, num_features=8, d_model=128, nhead=8, nlayers=4):
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch not available")
+        super().__init__()
+        self.num_tasks = num_tasks
+        self.num_features = num_features
+        self.d_model = d_model
+        
+        self.task_embedding = nn.Linear(num_features, d_model)
+        self.position_embedding = nn.Embedding(num_tasks, d_model)
+        self.cls_token = nn.Parameter(torch.randn(d_model))
+        
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, dim_feedforward=512,
+            dropout=0.1, activation='relu', batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=nlayers)
+        
+        self.policy_head = nn.Sequential(
+            nn.Linear(d_model, 256), nn.ReLU(), nn.Dropout(0.1),
+            nn.Linear(256, 128), nn.ReLU(), nn.Dropout(0.1),
+            nn.Linear(128, 1)
+        )
+    
+    def forward(self, x):
+        batch_size = x.shape[0]
+        positions = torch.arange(self.num_tasks, device=x.device).unsqueeze(0).expand(batch_size, -1)
+        
+        embeddings = self.task_embedding(x) + self.position_embedding(positions)
+        cls_tokens = self.cls_token.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, -1)
+        embeddings = torch.cat([cls_tokens, embeddings], dim=1)
+        
+        output = self.transformer(embeddings)
+        task_outputs = output[:, 1:, :]
+        return self.policy_head(task_outputs).squeeze(-1)
+    
+    def predict(self, x):
+        x = np.array(x)
+        if x.ndim == 4:
+            x = x.squeeze(-1).squeeze(0).T.reshape(1, self.num_tasks, self.num_features)
+        elif x.ndim == 2:
+            x = x.reshape(1, self.num_tasks, self.num_features)
+        
+        x = torch.from_numpy(x).float().to(next(self.parameters()).device)
+        self.eval()
+        with torch.no_grad():
+            return torch.softmax(self.forward(x), dim=1).cpu().numpy()
+
+
+class TransformerMCTSPlanner:
+    """Transformer-guided MCTS (falls back to pure MCTS if no model)."""
+    
+    def __init__(self, checkpoint_path=None, max_trackers=500, num_rollouts=50, device='cuda'):
+        self.max_trackers = max_trackers
+        self.num_tasks = max_trackers + 1
+        self.SEARCH_ACTION = 0
+        
+        # Fallback MCTS
+        self.pure_mcts = MCTSPlanner(max_trackers=max_trackers, num_rollouts=num_rollouts)
+        
+        # Load Transformer if available
+        self.model = None
+        if TORCH_AVAILABLE and checkpoint_path and os.path.exists(checkpoint_path):
+            self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+            self.model = PretrainedPureTransformer(num_tasks=self.num_tasks).to(self.device)
+            
+            state_dict = torch.load(checkpoint_path, map_location=self.device)
+            model_state = self.model.state_dict()
+            filtered = {k: v for k, v in state_dict.items() 
+                       if k in model_state and v.shape == model_state[k].shape}
+            model_state.update(filtered)
+            self.model.load_state_dict(model_state)
+            self.model.eval()
+            print(f"Loaded Transformer from {checkpoint_path}")
+    
+    def adapt_obs(self, obs):
+        """Convert 4-feature radarxs obs to 8-feature Transformer format."""
+        adapted = np.zeros((1, 8, self.num_tasks, 1), dtype=np.float32)
+        
+        # Task 0 = Search
+        adapted[0, :, 0, 0] = 0.0
+        
+        # Tasks 1..N = Trackers
+        adapted[0, 0, 1:, 0] = obs['t_desired']      # start_time
+        adapted[0, 1, 1:, 0] = obs['t_dwell']        # exec_time
+        adapted[0, 2, 1:, 0] = np.maximum(0, -obs['t_desired']) * 0.01  # tardiness
+        adapted[0, 3, 1:, 0] = obs['t_deadline']     # drop_time
+        adapted[0, 4, 1:, 0] = 100.0                 # drop_cost
+        adapted[0, 5, 1:, 0] = 0.0                   # scheduled_exec
+        adapted[0, 6, 1:, 0] = 0.0                   # scheduled
+        adapted[0, 7, 1:, 0] = (~obs['active_mask']).astype(np.float32)  # inactive
+        
+        return adapted
+    
+    def plan(self, obs, max_steps=None):
+        """Generate action plan."""
+        if self.model is None:
+            return self.pure_mcts.plan(obs, max_steps)
+        
+        if max_steps is None:
+            max_steps = int(np.sum(obs['active_mask'])) + 1
+        
+        plan = []
+        current_obs = {k: v.copy() for k, v in obs.items()}
+        
+        for _ in range(max_steps):
+            if not np.any(current_obs['active_mask']):
+                plan.append(self.SEARCH_ACTION)
+                break
+            
+            adapted = self.adapt_obs(current_obs)
+            probs = self.model.predict(adapted)
+            
+            # Mask inactive
+            probs[0, 0] = 0  # No search when targets available
+            for i in range(self.max_trackers):
+                if not current_obs['active_mask'][i]:
+                    probs[0, i + 1] = 0
+            
+            action = int(np.argmax(probs)) if np.sum(probs) > 0 else self.SEARCH_ACTION
+            plan.append(action)
+            
+            if action > 0:
+                current_obs['active_mask'][action - 1] = False
+        
+        return plan

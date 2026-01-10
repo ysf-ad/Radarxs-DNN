@@ -4,7 +4,17 @@
 #include "../env_binding.h"
 
 static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
-    env->size = unpack(kwargs, "size");
+    env->initial_targets = unpack(kwargs, "initial_targets");
+    env->max_trackers = unpack(kwargs, "max_trackers");
+    if (env->initial_targets == 0) env->initial_targets = 30; // Default
+    if (env->max_trackers == 0) env->max_trackers = 500; // Default
+    
+    // Allocate targets array
+    env->targets = (Target*)calloc(env->max_trackers, sizeof(Target));
+    if (!env->targets) {
+        printf("Failed to allocate targets!\n");
+        return -1;
+    }
     return 0;
 }
 
