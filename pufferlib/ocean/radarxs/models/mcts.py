@@ -7,6 +7,8 @@ NOTE: Uses 4 features per tracker (t_desired, t_deadline, t_dwell, priority)
 import numpy as np
 
 
+from .planner import Planner
+
 class Node:
     """MCTS Tree Node."""
     
@@ -41,26 +43,28 @@ class Node:
         return np.sum(overdue) + 0.1 * np.sum(deadline_urgency)
 
 
-class MCTSPlanner:
+class MCTSPlanner(Planner):
     """Pure MCTS with EST heuristic rollout."""
     
     def __init__(self, max_trackers=500, num_rollouts=50, exploration_constant=1.414):
-        self.max_trackers = max_trackers
+        super().__init__(max_trackers)
         self.num_rollouts = num_rollouts
         self.c = exploration_constant
         self.SEARCH_ACTION = 0
     
-    def plan(self, obs, max_steps=None):
+    def plan(self, obs, budget_ms=200):
         """
         Generate action plan using MCTS.
         
         Args:
             obs: Dict with 't_desired', 't_deadline', 'priority', 'active_mask'
-            max_steps: Max actions to return (None = all active targets)
+            budget_ms: Time budget (used to estimate max steps, approx 10ms per step)
         
         Returns:
             List[int]: Actions
         """
+        # Approx conversion: Average step is ~10ms (Search=10, Track=Var but assume small)
+        max_steps = int(budget_ms / 10.0) + 2
         root = Node(
             t_desired=obs['t_desired'],
             t_deadline=obs['t_deadline'],

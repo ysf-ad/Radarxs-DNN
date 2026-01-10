@@ -16,6 +16,7 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 from .mcts import MCTSPlanner, Node
+from .planner import Planner
 
 
 class PretrainedPureTransformer(nn.Module if TORCH_AVAILABLE else object):
@@ -70,10 +71,11 @@ class PretrainedPureTransformer(nn.Module if TORCH_AVAILABLE else object):
             return torch.softmax(self.forward(x), dim=1).cpu().numpy()
 
 
-class TransformerMCTSPlanner:
+class TransformerMCTSPlanner(Planner):
     """Transformer-guided MCTS (falls back to pure MCTS if no model)."""
     
     def __init__(self, checkpoint_path=None, max_trackers=500, num_rollouts=50, device='cuda'):
+        super().__init__(max_trackers)
         self.max_trackers = max_trackers
         self.num_tasks = max_trackers + 1
         self.SEARCH_ACTION = 0
@@ -115,13 +117,16 @@ class TransformerMCTSPlanner:
         
         return adapted
     
-    def plan(self, obs, max_steps=None):
+    
+    def plan(self, obs, budget_ms=200):
         """Generate action plan."""
-        if self.model is None:
-            return self.pure_mcts.plan(obs, max_steps)
+        # Approx max_steps
+        max_steps = int(budget_ms / 10.0) + 2
         
-        if max_steps is None:
-            max_steps = int(np.sum(obs['active_mask'])) + 1
+        if self.model is None:
+            return self.pure_mcts.plan(obs, budget_ms=budget_ms)
+        
+        # ... logic adapting max_steps ...
         
         plan = []
         current_obs = {k: v.copy() for k, v in obs.items()}

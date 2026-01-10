@@ -1,9 +1,11 @@
 import numpy as np
+from pufferlib.ocean.radarxs.models.planner import Planner
 
-class ESTPlanner:
+class ESTPlanner(Planner):
+    SEARCH_ACTION = 0
+
     def __init__(self, max_trackers=500):
-        self.max_trackers = max_trackers
-        self.SEARCH_ACTION = 0
+        super().__init__(max_trackers)
 
     def plan(self, obs, budget_ms=200):
         """
