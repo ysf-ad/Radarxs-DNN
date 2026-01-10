@@ -78,14 +78,16 @@ class RadarEngine:
     Each call to step_window() generates an action plan (length determined by planner) and executes it.
     """
     
-    def __init__(self, planner, initial_targets=50, max_trackers=MAX_TRACKERS, seed=1):
+    def __init__(self, planner, initial_targets=50, max_trackers=MAX_TRACKERS, seed=1, window_ms=200):
         """
         Args:
             planner: Planner instance with a plan() method (EST, MCTS, or Transformer).
             initial_targets: Number of targets to initialize.
             max_trackers: Maximum tracker capacity.
             seed: Random seed.
+            window_ms: Execution window duration in milliseconds (default 200).
         """
+        self.window_ms = window_ms
         self.planner = planner
         self.initial_targets = initial_targets
         self.max_trackers = max_trackers
@@ -132,22 +134,38 @@ class RadarEngine:
         Returns:
             float: Total reward accumulated in this window.
         """
-        # Get observation in MCTS format
-        mcts_obs = get_obs_from_buf(self.obs_buf, self.max_trackers)
+        # Get observation in planner-compatible format
+        planner_obs = get_obs_from_buf(self.obs_buf, self.max_trackers)
         
-        # Generate plan
-        plan = self.planner.plan(mcts_obs)
+        # Generate plan (passing window budget to hint candidate count)
+        plan = self.planner.plan(planner_obs, budget_ms=self.window_ms)
         
         # Execute plan
         window_reward = 0.0
+        cumulative_time = 0.0
+        t_dwell = planner_obs['t_dwell']
+        
         for action in plan:
+            # Estimate Dwell Time (for budget)
+            if action == 0: # SEARCH
+                est_dt = 10.0
+            else: # TRACK
+                est_dt = t_dwell[action-1]
+
+            # Execute action
             self.act_buf[0] = int(action)
             binding.vec_step(self.env)
             window_reward += self.rew_buf[0]
             self.total_steps += 1
             
+            cumulative_time += est_dt
+            
             # Check for episode termination
             if self.term_buf[0]:
+                break
+            
+            # Check for Window Time Budget
+            if cumulative_time >= self.window_ms:
                 break
         
         self.total_reward += window_reward
@@ -197,7 +215,7 @@ class RadarEngine:
 
 def benchmark_planner(planner, target_counts=[50, 100, 200, 500], num_windows=50, seed=1):
     """
-    Benchmark a planner across different target loads.
+    Benchmark a planner across different target loads. Testing utility
     
     Args:
         planner: Planner instance with a plan() method.
