@@ -21,9 +21,7 @@ def run_est(n_targets, total_steps=5000, seed=42):
     # Initialize Engine
     rad_engine = engine.RadarEngine(planner, initial_targets=n_targets, max_trackers=MAX_TRACKERS, seed=seed)
     
-    # Run simulation (Num windows approximated to match steps if window~20, else just N plans)
-    # Using 250 windows as meaningful proxy for ~5000 steps if windows are around 20 steps
-    # If dynamic windows are longer, this will run for more steps, but avg_reward_per_step handles it.
+    # Run simulation for ~5000 steps if windows are around 20 steps
     stats = rad_engine.run_episode(num_windows=250)
     
     rad_engine.close()
