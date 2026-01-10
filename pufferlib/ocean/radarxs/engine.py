@@ -1,14 +1,12 @@
 """
-Radar Engine: 200ms Window Execution for Radar Task Scheduling.
+Radar Scheduling Engine.
 Connects planners (EST, MCTS, Transformer) to the C binding environment.
 
-NOTE: Original radarxs.h has 3 features per tracker:
-  - t_desired: Time until desired update (decrements each step)
-  - t_deadline: Time until deadline (decrements each step)  
-  - t_dwell: Estimated dwell time for this target
-
-Priority is stored as the 4th "virtual" feature (actually part of Target struct, 
-but we derive it from t_deadline or use NO_TARGET=-1 as inactive marker).
+Observation Features (per tracker):
+  - t_desired: Time until next update is needed.
+  - t_deadline: Time until track is lost (deadline).
+  - t_dwell: Estimated execution time for this action.
+  - priority: Urgency score. -1 (NO_TARGET) indicates an inactive/empty slot.
 """
 import numpy as np
 from . import binding
