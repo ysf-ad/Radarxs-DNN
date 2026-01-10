@@ -1,8 +1,5 @@
-"""
-EST (Earliest Start Time) Greedy Planner - Simple Version.
-"""
 import numpy as np
-
+# refer to ../est_test.py to run
 class ESTPlanner:
     def __init__(self, max_trackers=500, steps_per_window=20):
         self.max_trackers = max_trackers
