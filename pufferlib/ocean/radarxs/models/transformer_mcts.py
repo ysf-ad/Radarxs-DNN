@@ -173,7 +173,14 @@ class TransformerMCTSPlanner(Planner):
                     'active_mask': node.active_mask
                 })
                 probs = self.model.predict(adapted)[0]
-                action = int(np.argmax(probs)) if np.any(node.active_mask) else self.SEARCH_ACTION
+                
+                # Mask out inactive trackers and index 0 if targets exist
+                probs[0] = 0 # No search if possible
+                for i in range(self.max_trackers):
+                    if i >= len(node.active_mask) or not node.active_mask[i]:
+                        probs[i+1] = 0
+                
+                action = int(np.argmax(probs)) if np.sum(probs) > 0 else self.SEARCH_ACTION
                 plan.append(action)
                 if action > 0:
                     node.active_mask[action-1] = False
