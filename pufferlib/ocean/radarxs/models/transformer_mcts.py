@@ -74,7 +74,7 @@ class PretrainedPureTransformer(nn.Module if TORCH_AVAILABLE else object):
 class TransformerMCTSPlanner(Planner):
     """Transformer-guided MCTS (falls back to pure MCTS if no model)."""
     
-    def __init__(self, checkpoint_path=None, model=None, max_trackers=500, num_rollouts=50, device='cuda'):
+    def __init__(self, checkpoint_path=None, model=None, max_trackers=500, num_rollouts=50, device='cuda', use_search=True):
         super().__init__(max_trackers)
         self.max_trackers = max_trackers
         self.num_tasks = max_trackers + 1
@@ -119,36 +119,69 @@ class TransformerMCTSPlanner(Planner):
     
     
     def plan(self, obs, budget_ms=200):
-        """Generate action plan."""
-        # Approx max_steps
-        max_steps = int(budget_ms / 10.0) + 2
-        
+        """Generate action plan using model-guided MCTS."""
         if self.model is None:
             return self.pure_mcts.plan(obs, budget_ms=budget_ms)
         
-        # ... logic adapting max_steps ...
+        # Determine steps-to-plan (limited by budget)
+        max_steps = int(budget_ms / 10.0) + 2
         
+        root = Node(
+            t_desired=obs['t_desired'],
+            t_deadline=obs['t_deadline'],
+            t_dwell=obs['t_dwell'],
+            priority=obs['priority'],
+            active_mask=obs['active_mask']
+        )
+        
+        # Guided MCTS loop
+        for _ in range(self.pure_mcts.num_rollouts):
+            node = root
+            # 1. Select
+            while node.expanded and node.children and not node.is_terminal():
+                node = self.pure_mcts._ucb_select(node)
+            
+            # 2. Expand with Model Priors
+            if not node.is_terminal() and not node.expanded:
+                adapted = self.adapt_obs({
+                    't_desired': node.t_desired,
+                    't_deadline': node.t_deadline,
+                    't_dwell': node.t_dwell,
+                    'priority': node.priority,
+                    'active_mask': node.active_mask
+                })
+                priors = self.model.predict(adapted)[0]
+                self.pure_mcts._expand(node, priors=priors)
+            
+            # 3. Simulate (Value)
+            reward = self.pure_mcts._simulate(node)
+            
+            # 4. Backprop
+            self.pure_mcts._backprop(node, reward)
+        
+        # Extract path
         plan = []
-        current_obs = {k: v.copy() if hasattr(v, 'copy') else v for k, v in obs.items()}
-        
+        node = root
         for _ in range(max_steps):
-            if not np.any(current_obs['active_mask']):
-                plan.append(self.SEARCH_ACTION)
-                break
+            if not node.children:
+                # Fallback to model greedy if search depth reached
+                adapted = self.adapt_obs({
+                    't_desired': node.t_desired,
+                    't_deadline': node.t_deadline,
+                    't_dwell': node.t_dwell,
+                    'priority': node.priority,
+                    'active_mask': node.active_mask
+                })
+                probs = self.model.predict(adapted)[0]
+                action = int(np.argmax(probs)) if np.any(node.active_mask) else self.SEARCH_ACTION
+                plan.append(action)
+                if action > 0:
+                    node.active_mask[action-1] = False
+                continue
+                
+            best_child = max(node.children, key=lambda c: c.total_reward / max(1, c.visits))
+            plan.append(best_child.action)
+            node = best_child
+            if node.is_terminal(): break
             
-            adapted = self.adapt_obs(current_obs)
-            probs = self.model.predict(adapted)
-            
-            # Mask inactive
-            probs[0, 0] = 0  # No search when targets available
-            for i in range(self.max_trackers):
-                if not current_obs['active_mask'][i]:
-                    probs[0, i + 1] = 0
-            
-            action = int(np.argmax(probs)) if np.sum(probs) > 0 else self.SEARCH_ACTION
-            plan.append(action)
-            
-            if action > 0:
-                current_obs['active_mask'][action - 1] = False
-        
         return plan

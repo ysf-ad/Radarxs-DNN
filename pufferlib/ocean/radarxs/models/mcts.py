@@ -12,14 +12,16 @@ from .planner import Planner
 class Node:
     """MCTS Tree Node."""
     
-    def __init__(self, t_desired, t_deadline, priority, active_mask, parent=None, action=None):
+    def __init__(self, t_desired, t_deadline, t_dwell, priority, active_mask, parent=None, action=None, prior_prob=0.0):
         self.t_desired = t_desired.copy()
         self.t_deadline = t_deadline.copy()
+        self.t_dwell = t_dwell.copy()
         self.priority = priority.copy()
         self.active_mask = active_mask.copy()
         
         self.parent = parent
         self.action = action
+        self.prior_prob = prior_prob
         self.children = []
         self.visits = 0
         self.total_reward = 0.0
@@ -68,6 +70,7 @@ class MCTSPlanner(Planner):
         root = Node(
             t_desired=obs['t_desired'],
             t_deadline=obs['t_deadline'],
+            t_dwell=obs['t_dwell'],
             priority=obs['priority'],
             active_mask=obs['active_mask']
         )
@@ -110,20 +113,18 @@ class MCTSPlanner(Planner):
         return node
     
     def _ucb_select(self, node):
-        log_parent = np.log(node.visits + 1)
         best_score, best_child = -np.inf, node.children[0] if node.children else None
         
         for child in node.children:
-            if child.visits == 0:
-                return child
-            exploit = child.total_reward / child.visits
-            explore = self.c * np.sqrt(log_parent / child.visits)
+            exploit = child.total_reward / max(1, child.visits)
+            # PUCT formula: Q + C * P * sqrt(parent_N) / (1 + child_N)
+            explore = self.c * child.prior_prob * np.sqrt(node.visits + 1) / (1 + child.visits)
             score = exploit + explore
             if score > best_score:
                 best_score, best_child = score, child
         return best_child
     
-    def _expand(self, node, force_engagement=True):
+    def _expand(self, node, force_engagement=True, priors=None):
         valid_actions = node.get_valid_actions()
         if force_engagement and len(valid_actions) > 1:
             valid_actions = [a for a in valid_actions if a != 0]
@@ -133,13 +134,17 @@ class MCTSPlanner(Planner):
             if action > 0:
                 child_active[action - 1] = False
             
+            prior = 1.0 / len(valid_actions) if priors is None else priors[action]
+            
             child = Node(
                 t_desired=node.t_desired,
                 t_deadline=node.t_deadline,
+                t_dwell=node.t_dwell,
                 priority=node.priority,
+                action=action,
                 active_mask=child_active,
                 parent=node,
-                action=action
+                prior_prob=prior
             )
             node.children.append(child)
         node.expanded = True

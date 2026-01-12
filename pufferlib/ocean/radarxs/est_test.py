@@ -54,7 +54,7 @@ def main():
     target_counts = [1, 5] + target_counts
     target_counts = sorted(list(set(target_counts)))
     
-    seeds = list(range(42, 52)) # 10 seeds
+    seeds = range(5)
     
     # Pre-load transformer model to speed up benchmark
     print("Loading Transformer model once...")
