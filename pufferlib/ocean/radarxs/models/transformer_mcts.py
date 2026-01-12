@@ -74,7 +74,7 @@ class PretrainedPureTransformer(nn.Module if TORCH_AVAILABLE else object):
 class TransformerMCTSPlanner(Planner):
     """Transformer-guided MCTS (falls back to pure MCTS if no model)."""
     
-    def __init__(self, checkpoint_path=None, max_trackers=500, num_rollouts=50, device='cuda'):
+    def __init__(self, checkpoint_path=None, model=None, max_trackers=500, num_rollouts=50, device='cuda'):
         super().__init__(max_trackers)
         self.max_trackers = max_trackers
         self.num_tasks = max_trackers + 1
@@ -84,8 +84,8 @@ class TransformerMCTSPlanner(Planner):
         self.pure_mcts = MCTSPlanner(max_trackers=max_trackers, num_rollouts=num_rollouts)
         
         # Load Transformer if available
-        self.model = None
-        if TORCH_AVAILABLE and checkpoint_path and os.path.exists(checkpoint_path):
+        self.model = model
+        if self.model is None and TORCH_AVAILABLE and checkpoint_path and os.path.exists(checkpoint_path):
             self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
             self.model = PretrainedPureTransformer(num_tasks=self.num_tasks).to(self.device)
             
@@ -129,7 +129,7 @@ class TransformerMCTSPlanner(Planner):
         # ... logic adapting max_steps ...
         
         plan = []
-        current_obs = {k: v.copy() for k, v in obs.items()}
+        current_obs = {k: v.copy() if hasattr(v, 'copy') else v for k, v in obs.items()}
         
         for _ in range(max_steps):
             if not np.any(current_obs['active_mask']):

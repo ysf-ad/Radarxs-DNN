@@ -1,112 +1,135 @@
 """
-EST Benchmark - Using ESTPlanner Class
+EST vs EDF vs Transformer Benchmark
+Includes individual trial scatter plots.
 """
 import sys
 sys.path.insert(0, 'PufferLib')
 
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 from pufferlib.ocean.radarxs import binding, engine
-from pufferlib.ocean.radarxs.models import est
+from pufferlib.ocean.radarxs.models import est, edf
+from pufferlib.ocean.radarxs.models.transformer_mcts import TransformerMCTSPlanner
 
-# Constants (Must match environment)
 # Constants (Must match environment)
 FEATURES_PER_TRACKER = 4
-MAX_TRACKERS = 300  # Cap at 300 to show flatline
+MAX_TRACKERS = 300
 GRID_SIZE = 300
 
-def run_est(n_targets, total_steps=5000, seed=42):
-    """Run EST Planner using the standard RadarEngine."""
-    # Simulate "Ignoring Excess": Cap init targets at MAX
+def run_planner(planner_cls, n_targets, total_steps=5000, seed=42, model=None):
+    """Run specified Planner using the standard RadarEngine."""
     actual_targets = min(n_targets, MAX_TRACKERS)
     
-    planner = est.ESTPlanner(max_trackers=MAX_TRACKERS)
+    # Initialize planner
+    kw = {'max_trackers': MAX_TRACKERS}
+    if model:
+        kw['model'] = model
+        kw['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+    planner = planner_cls(**kw)
     
-    # Initialize Engine
     rad_engine = engine.RadarEngine(planner, initial_targets=actual_targets, max_trackers=MAX_TRACKERS, seed=seed)
-    
-    # Debug: Check active count
-    start_obs = None
-    end_obs = None
-    
-    # We need to manually run loop to inspect
-    obs = rad_engine.reset()
-    start_obs = engine.get_obs_from_buf(rad_engine.obs_buf, MAX_TRACKERS)
-    start_active = np.sum(start_obs['active_mask'])
+    rad_engine.reset()
     
     total_steps = 0
     total_reward = 0
     
-    # Run simulation for ~5000 steps
     num_windows = 250
     for _ in range(num_windows):
         rew = rad_engine.step_window()
         total_reward += rew
-        total_steps += 20 # Approx
+        total_steps += 20
         
-    end_obs = engine.get_obs_from_buf(rad_engine.obs_buf, MAX_TRACKERS)
-    end_active = np.sum(end_obs['active_mask'])
-    
     rad_engine.close()
     
-    return {
-        'n_targets': n_targets, 
-        'total_reward': total_reward,
-        'avg_reward': total_reward / total_steps,
-        'start_active': start_active,
-        'end_active': end_active
-    }
+    return total_reward / total_steps
 
 def main():
     print("=" * 60)
-    print("EST Benchmark (Max Trackers = 300 -> Flatline)")
+    print("EST vs EDF vs Transformer Benchmark (10 Trials)")
     print("=" * 60)
     
-    # Paper-like sweep: 10 to 500
-    target_counts = list(range(10, 520, 20))
-    # Add critical points
-    target_counts = [1, 5, 290, 300, 310, 350] + target_counts
+    target_counts = list(range(10, 320, 20))
+    target_counts = [1, 5] + target_counts
     target_counts = sorted(list(set(target_counts)))
     
-    seeds = [42, 43, 44] # 3 Trials
+    seeds = list(range(42, 52)) # 10 seeds
     
-    results = {} # n -> [rewards...]
+    # Pre-load transformer model to speed up benchmark
+    print("Loading Transformer model once...")
+    temp_planner = TransformerMCTSPlanner(checkpoint_path='transformer_est.pth', max_trackers=MAX_TRACKERS)
+    transformer_model = temp_planner.model
     
-    for n in target_counts:
-        run_rewards = []
-        for seed in seeds:
-            res = run_est(n, total_steps=5000, seed=seed)
-            run_rewards.append(res['avg_reward'])
-        
-        avg = np.mean(run_rewards)
-        std = np.std(run_rewards)
-        results[n] = {'mean': avg, 'std': std} 
-        
-        print(f"Load {n:3d}: Mean={avg:+.4f}, Std={std:.4f}")
+    planners = {
+        'EST': (est.ESTPlanner, None),
+        'EDF': (edf.EDFPlanner, None),
+        'Transformer': (TransformerMCTSPlanner, transformer_model),
+    }
+    
+    colors = {
+        'EST': 'red',
+        'EDF': 'blue',
+        'Transformer': 'orange'
+    }
+    
+    # Store results: name -> {load -> [rewards...]}
+    results = {name: {n: [] for n in target_counts} for name in planners}
+    
+    for name, (p_cls, model_obj) in planners.items():
+        print(f"\nRunning {name}...")
+        for n in target_counts:
+            print(f"  Load {n:3d}: ", end='', flush=True)
+            for seed in seeds:
+                avg_rew = run_planner(p_cls, n, total_steps=5000, seed=seed, model=model_obj)
+                results[name][n].append(avg_rew)
+                print(".", end='', flush=True)
+            
+            mean = np.mean(results[name][n])
+            print(f" Mean={mean:+.4f}")
 
     # Plot
-    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
     
-    loads = sorted(results.keys())
-    means = np.array([results[n]['mean'] for n in loads])
-    stds = np.array([results[n]['std'] for n in loads])
-    
-    # Line with Error Band
-    ax.plot(loads, means, 'b-', label='EST Mean Reward', linewidth=2)
-    ax.fill_between(loads, means - stds, means + stds, color='blue', alpha=0.2, label='±1 Std Dev')
+    for name, load_dict in results.items():
+        c = colors[name]
+        
+        loads = []
+        means = []
+        all_x = []
+        all_y = []
+        
+        for n in target_counts:
+            rewards = load_dict[n]
+            loads.append(n)
+            means.append(np.mean(rewards))
+            
+            # For scatter
+            all_x.extend([n] * len(rewards))
+            all_y.extend(rewards)
+        
+        # Plot mean line with shade
+        ax.plot(loads, means, color=c, label=f"{name} (Mean)", linewidth=2, zorder=10)
+        
+        # Plot individual dots
+        ax.scatter(all_x, all_y, color=c, s=15, alpha=0.5, label=f"{name} (Trials)", zorder=5)
     
     ax.axhline(y=0, color='k', linestyle='--', alpha=0.5)
     
     ax.set_xlabel('Number of Targets', fontsize=12)
     ax.set_ylabel('Mean Reward per Step', fontsize=12)
-    ax.set_title('EST Performance: Reward vs Load', fontsize=14)
+    ax.set_title('Scheduler Benchmarks: EST (Red), EDF (Blue), Transformer (Orange)', fontsize=14)
     ax.grid(True, alpha=0.3)
+    
+    # Custom legend to avoid duplicate dots
+    handles, labels = ax.get_legend_handles_labels()
+    # Filter to keep only lines, or simplified legend
+    # For now default legend is okay, but might be crowded
     ax.legend()
     
     plt.tight_layout()
-    plt.savefig('est_paper_plot.png', dpi=150)
-    print(f"\nPlot saved to: est_paper_plot.png")
-
+    plt.savefig('benchmark_final.png', dpi=150)
+    print(f"\nPlot saved to: benchmark_final.png")
 
 if __name__ == "__main__":
     main()

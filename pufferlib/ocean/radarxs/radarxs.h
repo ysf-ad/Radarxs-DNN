@@ -34,7 +34,7 @@ const float AZ_DEGREES_PER_SLICE = 90.0f / MAX_AZ_SLICES;
 const float EL_DEGREES_PER_SLICE = 30.0f / MAX_EL_SLICES;
 
 const int MAX_SEARCHERS = 1;
-const int FEATURES_PER_TRACKER = 3;  // t_desired, t_deadline, t_dwell_estimate
+const int FEATURES_PER_TRACKER = 4;  // t_desired, t_deadline, t_dwell_estimate, priority
 
 const int PLACEHOLDER_FOR_SENSOR_ID = 1;
 
@@ -126,7 +126,7 @@ typedef struct {
 // Required struct named same as env 
 typedef struct {
     Log log; // Required field. Env binding code uses this to aggregate logs
-    int16_t* observations; // Required. You can use any obs type, but make sure it matches in Python!
+    float* observations; // Required. You can use any obs type, but make sure it matches in Python!
     int* actions; // Required. int* for discrete/multidiscrete, float* for box
     float* rewards; // Required
     unsigned char* terminals; // Required. We don't yet have truncations as standard yet
@@ -241,6 +241,10 @@ void update_tracker(Radarxs *env, int tracker_id) {
       new_t_deadline;
   env->observations[MAX_AZ_SLICES * MAX_EL_SLICES + tracker_id * FEATURES_PER_TRACKER + 2] =
       new_t_dwell_estimate;
+  // Priority: Use target priority (0-2) or -1 if not tracked
+  env->observations[MAX_AZ_SLICES * MAX_EL_SLICES + tracker_id * FEATURES_PER_TRACKER + 3] =
+      (float)env->targets[tracker_id].priority;
+  
 }
 
 void search_sector(Radarxs *env, int sector) {
@@ -323,6 +327,8 @@ void c_reset(Radarxs *env) {
   }
   for (int i = 0; i < env->initial_targets; i++) {
     env->targets[i].is_active = true;
+    env->targets[i].is_tracked = true;  // Mark as tracked
+    update_tracker(env, i);  // Populate initial observations
   }
 }
 
