@@ -151,7 +151,7 @@ class TransformerMCTSPlanner(Planner):
                     'active_mask': node.active_mask
                 })
                 priors = self.model.predict(adapted)[0]
-                self.pure_mcts._expand(node, priors=priors)
+                self.pure_mcts._expand(node, priors=priors, top_k=10)
             
             # 3. Simulate (Value)
             reward = self.pure_mcts._simulate(node)

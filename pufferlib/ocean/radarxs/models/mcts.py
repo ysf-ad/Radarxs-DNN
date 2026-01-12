@@ -124,10 +124,17 @@ class MCTSPlanner(Planner):
                 best_score, best_child = score, child
         return best_child
     
-    def _expand(self, node, force_engagement=True, priors=None):
+    def _expand(self, node, force_engagement=True, priors=None, top_k=None):
         valid_actions = node.get_valid_actions()
         if force_engagement and len(valid_actions) > 1:
             valid_actions = [a for a in valid_actions if a != 0]
+            
+        # Optimization: Only expand top_k actions if priors are provided
+        if priors is not None and top_k is not None and len(valid_actions) > top_k:
+            # Get actions with highest priors among valid actions
+            valid_priors = [(a, priors[a]) for a in valid_actions]
+            valid_priors.sort(key=lambda x: x[1], reverse=True)
+            valid_actions = [x[0] for x in valid_priors[:top_k]]
         
         for action in valid_actions:
             child_active = node.active_mask.copy()
