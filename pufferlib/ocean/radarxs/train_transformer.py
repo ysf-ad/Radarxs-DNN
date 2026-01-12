@@ -108,6 +108,7 @@ def train_model(X, Y, epochs=50, batch_size=64, lr=1e-4):
             logits = model(batch_X)
             loss = criterion(logits, batch_Y)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
             optimizer.step()
             
             total_loss += loss.item()
@@ -175,7 +176,7 @@ def main():
     
     # Train
     print("\n[2/3] Training Transformer...")
-    model = train_model(X, Y, epochs=100, batch_size=128, lr=3e-4)
+    model = train_model(X, Y, epochs=100, batch_size=128, lr=1e-4)  # Reduced LR for stability
     
     # Validate
     print("\n[3/3] Validating trained model...")
