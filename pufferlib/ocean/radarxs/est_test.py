@@ -14,7 +14,7 @@ from pufferlib.ocean.radarxs.models.transformer_mcts import TransformerMCTSPlann
 
 # Constants (Must match environment)
 FEATURES_PER_TRACKER = 4
-MAX_TRACKERS = 300
+MAX_TRACKERS = 500
 GRID_SIZE = 300
 
 def run_planner(planner_cls, n_targets, total_steps=5000, seed=42, model=None):
@@ -26,24 +26,24 @@ def run_planner(planner_cls, n_targets, total_steps=5000, seed=42, model=None):
     if model:
         kw['model'] = model
         kw['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
+        kw['num_rollouts'] = 100 # Boost search for Transformer
         
     planner = planner_cls(**kw)
     
     rad_engine = engine.RadarEngine(planner, initial_targets=actual_targets, max_trackers=MAX_TRACKERS, seed=seed)
     rad_engine.reset()
     
-    total_steps = 0
     total_reward = 0
     
     num_windows = 250
     for _ in range(num_windows):
         rew = rad_engine.step_window()
         total_reward += rew
-        total_steps += 20
         
+    actual_steps = rad_engine.total_steps
     rad_engine.close()
     
-    return total_reward / total_steps
+    return total_reward / max(1, actual_steps)
 
 def main():
     print("=" * 60)
